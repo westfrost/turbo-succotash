@@ -138,7 +138,14 @@ section > h2 {
   font-weight: 600;
 }
 
-.table-scroll { overflow-x: auto; }
+.table-scroll { overflow: auto; max-height: 520px; }
+
+.table-scroll thead th {
+  position: sticky;
+  top: 0;
+  background: var(--surface-1);
+  z-index: 1;
+}
 
 table {
   width: 100%;

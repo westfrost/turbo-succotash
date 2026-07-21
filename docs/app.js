@@ -124,6 +124,25 @@
     };
   }
 
+  // Skjuler kortet og viser en note, hvis der ikke er data nok til grafen.
+  function chartOrNotice(canvasId, rows) {
+    const card = document.getElementById(canvasId).closest('.chart-card');
+    let note = card.querySelector('.nodata');
+    if (rows.length === 0) {
+      card.querySelector('.chart-box').style.display = 'none';
+      if (!note) {
+        note = document.createElement('p');
+        note.className = 'notice nodata';
+        note.textContent = 'Ikke nok data endnu – kom tilbage, når databasen har samlet mere.';
+        card.appendChild(note);
+      }
+      return false;
+    }
+    card.querySelector('.chart-box').style.display = '';
+    note?.remove();
+    return true;
+  }
+
   function renderCharts() {
     charts.forEach((ch) => ch.destroy());
     charts = [];
@@ -162,7 +181,7 @@
 
     // 2) Punktlighed pr. dag – linje
     const days = stats.days.filter((d) => d.punctuality != null);
-    charts.push(new Chart(document.getElementById('chartDays'), {
+    if (chartOrNotice('chartDays', days)) charts.push(new Chart(document.getElementById('chartDays'), {
       type: 'line',
       data: {
         labels: days.map((d) => dayFmt.format(new Date(d.date))),
@@ -181,7 +200,7 @@
 
     // 3) Punktlighed pr. time – søjler
     const hours = stats.byHour.filter((h) => h.total >= 5 && h.punctuality != null);
-    charts.push(new Chart(document.getElementById('chartHours'), {
+    if (chartOrNotice('chartHours', hours)) charts.push(new Chart(document.getElementById('chartHours'), {
       type: 'bar',
       data: {
         labels: hours.map((h) => h.key),
@@ -203,7 +222,7 @@
 
     // 4) Punktlighed pr. togtype – vandrette søjler
     const prods = stats.byProduct.filter((p) => p.punctuality != null);
-    charts.push(new Chart(document.getElementById('chartProducts'), {
+    if (chartOrNotice('chartProducts', prods)) charts.push(new Chart(document.getElementById('chartProducts'), {
       type: 'bar',
       data: {
         labels: prods.map((p) => p.key),
@@ -221,7 +240,7 @@
 
     // 5) Mest forsinkede linjer
     const worst = stats.worstLines ?? [];
-    charts.push(new Chart(document.getElementById('chartLines'), {
+    if (chartOrNotice('chartLines', worst)) charts.push(new Chart(document.getElementById('chartLines'), {
       type: 'bar',
       data: {
         labels: worst.map((l) => l.key),
