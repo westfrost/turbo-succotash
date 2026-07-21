@@ -1,5 +1,8 @@
 name: Udgiv website
 
+# GitHub Pages serverer gh-pages-branchen (auto-aktiveret ved branch-oprettelse,
+# da GITHUB_TOKEN ikke må oprette Pages-sites). Dette workflow spejler docs/
+# til gh-pages, hver gang websitet eller dataene ændres på main.
 on:
   push:
     branches:
@@ -9,9 +12,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
-  pages: write
-  id-token: write
+  contents: write
 
 concurrency:
   group: pages
@@ -20,16 +21,17 @@ concurrency:
 jobs:
   deploy:
     runs-on: ubuntu-latest
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/configure-pages@v5
-        with:
-          enablement: true
-      - uses: actions/upload-pages-artifact@v3
-        with:
-          path: docs
-      - id: deployment
-        uses: actions/deploy-pages@v4
+
+      - name: Udgiv docs/ til gh-pages
+        run: |
+          cd docs
+          touch .nojekyll
+          git init -b gh-pages
+          git config user.name "togstatus-bot"
+          git config user.email "actions@users.noreply.github.com"
+          git add -A
+          git commit -m "Udgiv website (${GITHUB_SHA})"
+          git push --force "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git" gh-pages
