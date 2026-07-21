@@ -197,19 +197,24 @@ function mergeIntoDay(dayMap, deps, nowIso) {
       rec.date = date;
       rec.hour = hour;
     }
-    // seneste observation (størst planlagt tid) bestemmer aktuel status
-    if (d.plannedWhen >= (rec._lastPlanned ?? rec.planned)) {
-      rec._lastPlanned = d.plannedWhen;
+    // Seneste observation MED realtidsdata bestemmer aktuel status. Stationer
+    // langt ude i fremtiden har endnu ingen realtid (delay=null) og må ikke
+    // overskrive en kendt forsinkelse.
+    if (delay != null && d.plannedWhen >= (rec._lastRtPlanned ?? '')) {
+      rec._lastRtPlanned = d.plannedWhen;
       rec.lastDelay = delay;
       rec.lastStation = d._station;
+      rec.maxDelay = Math.max(rec.maxDelay ?? 0, delay);
     }
-    if (delay != null) rec.maxDelay = Math.max(rec.maxDelay ?? 0, delay);
     rec.seenAt = nowIso;
     dayMap[d.tripId] = rec;
 
+    // Live-tabellen: foretræk observationer med realtid, dernæst tidligste.
+    const hasRt = delay != null || d.cancelled;
     const existing = latestRows.get(d.tripId);
-    if (!existing || d.plannedWhen < existing.planned) {
+    if (!existing || (hasRt && !existing._hasRt) || (hasRt === Boolean(existing._hasRt) && d.plannedWhen < existing.planned)) {
       latestRows.set(d.tripId, {
+        _hasRt: hasRt,
         id: d.tripId,
         line: rec.line,
         product: rec.product,
@@ -225,7 +230,9 @@ function mergeIntoDay(dayMap, deps, nowIso) {
       });
     }
   }
-  return [...latestRows.values()].sort((a, b) => a.planned.localeCompare(b.planned));
+  return [...latestRows.values()]
+    .map(({_hasRt, ...row}) => row)
+    .sort((a, b) => a.planned.localeCompare(b.planned));
 }
 
 // ---------- statistik ----------
