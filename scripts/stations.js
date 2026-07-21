@@ -1,0 +1,58 @@
+// Stationer der tilsammen dækker alle jernbanestrækninger i Danmark.
+// Navnene slås op mod Rejseplanen én gang og caches i data/stations.json.
+export const STATION_NAMES = [
+  // Hovedstaden & S-togsnettet
+  'København H',
+  'Nørreport St.',
+  'Østerport St.',
+  'Valby St.',
+  'Hellerup St.',
+  'Lyngby St.',
+  'Hillerød St.',
+  'Helsingør St.',
+  'Farum St.',
+  'Frederikssund St.',
+  'Høje Taastrup St.',
+  'Køge St.',
+  // Sjælland, Lolland-Falster
+  'Roskilde St.',
+  'Holbæk St.',
+  'Kalundborg St.',
+  'Ringsted St.',
+  'Slagelse St.',
+  'Korsør St.',
+  'Næstved St.',
+  'Vordingborg St.',
+  'Nykøbing F St.',
+  // Fyn
+  'Odense St.',
+  'Nyborg St.',
+  'Middelfart St.',
+  'Svendborg St.',
+  // Syd- og Sønderjylland
+  'Fredericia St.',
+  'Kolding St.',
+  'Esbjerg St.',
+  'Ribe St.',
+  'Tønder St.',
+  'Sønderborg St.',
+  'Padborg St.',
+  // Midtjylland
+  'Vejle St.',
+  'Horsens St.',
+  'Skanderborg St.',
+  'Aarhus H',
+  'Silkeborg St.',
+  'Herning St.',
+  'Skjern St.',
+  'Viborg St.',
+  'Struer St.',
+  'Holstebro St.',
+  // Nordjylland
+  'Randers St.',
+  'Hobro St.',
+  'Aalborg St.',
+  'Hjørring St.',
+  'Frederikshavn St.',
+  'Thisted St.',
+];
