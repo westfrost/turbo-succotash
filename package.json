@@ -1,0 +1,13 @@
+{
+  "name": "dk-togstatus",
+  "version": "1.0.0",
+  "description": "Selvopdaterende database over punktlighed for tog i Danmark",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "fetch": "node scripts/fetch.js"
+  },
+  "dependencies": {
+    "hafas-client": "^6.3.6"
+  }
+}

@@ -1,0 +1,109 @@
+<!doctype html>
+<html lang="da">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>DK Togstatus – punktlighed for tog i Danmark</title>
+<meta name="description" content="Selvopdaterende overblik over om togene i Danmark kører til tiden, før tid eller er forsinkede.">
+<link rel="stylesheet" href="style.css">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🚆</text></svg>">
+<script src="vendor/chart.umd.min.js"></script>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>🚆 DK Togstatus</h1>
+    <p class="sub">Kører togene i Danmark til tiden? Databasen opdaterer sig selv hver time med data fra Rejseplanen.</p>
+    <p class="updated" id="updated">Indlæser…</p>
+  </header>
+
+  <div class="kpis" id="kpis"></div>
+
+  <section class="tips">
+    <h2>💡 Tips</h2>
+    <div class="card"><ul id="tips"><li class="notice">Indlæser…</li></ul></div>
+  </section>
+
+  <section>
+    <h2>🔎 Søg i aktuelle afgange</h2>
+    <div class="card">
+      <div class="controls">
+        <input type="search" id="search" placeholder="Søg på linje, station, retning eller operatør…" aria-label="Søg i afgange">
+        <button class="chip" data-status="" aria-pressed="true">Alle</button>
+        <button class="chip" data-status="tiltiden" aria-pressed="false">Til tiden</button>
+        <button class="chip" data-status="foertid" aria-pressed="false">Før tid</button>
+        <button class="chip" data-status="forsinket" aria-pressed="false">Forsinkede</button>
+        <button class="chip" data-status="aflyst" aria-pressed="false">Aflyste</button>
+      </div>
+      <div class="table-scroll">
+        <table id="trains">
+          <thead>
+            <tr>
+              <th>Tog</th><th>Retning</th><th>Station</th>
+              <th class="num">Planlagt</th><th class="num">Forventet</th>
+              <th class="num">Forsinkelse</th><th>Status</th>
+            </tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+      </div>
+      <p class="notice" id="trainCount"></p>
+    </div>
+  </section>
+
+  <section>
+    <h2>📊 Grafer</h2>
+    <div class="charts">
+      <div class="card chart-card" style="grid-column: 1 / -1;">
+        <h3>Status lige nu</h3>
+        <p class="desc">Fordeling af dagens registrerede tog</p>
+        <div class="chart-box slim"><canvas id="chartStatus"></canvas></div>
+      </div>
+      <div class="card chart-card">
+        <h3>Punktlighed pr. dag</h3>
+        <p class="desc">Andel tog til tiden (&lt; 3 min forsinket), seneste 45 dage</p>
+        <div class="chart-box"><canvas id="chartDays"></canvas></div>
+      </div>
+      <div class="card chart-card">
+        <h3>Punktlighed over døgnet</h3>
+        <p class="desc">Andel tog til tiden pr. afgangstime, hele perioden</p>
+        <div class="chart-box"><canvas id="chartHours"></canvas></div>
+      </div>
+      <div class="card chart-card">
+        <h3>Punktlighed pr. togtype</h3>
+        <p class="desc">Hele perioden</p>
+        <div class="chart-box"><canvas id="chartProducts"></canvas></div>
+      </div>
+      <div class="card chart-card">
+        <h3>Mest forsinkede linjer</h3>
+        <p class="desc">Laveste andel til tiden (min. 25 registrerede tog)</p>
+        <div class="chart-box tall"><canvas id="chartLines"></canvas></div>
+      </div>
+    </div>
+    <details class="tableview">
+      <summary>Vis tallene som tabel</summary>
+      <div class="card table-scroll" style="margin-top:8px;">
+        <table id="dayTable">
+          <thead>
+            <tr>
+              <th>Dato</th><th class="num">Tog</th><th class="num">Til tiden</th>
+              <th class="num">Før tid</th><th class="num">Forsinkede</th>
+              <th class="num">Aflyste</th><th class="num">Punktlighed</th>
+              <th class="num">Gns. forsinkelse</th>
+            </tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </details>
+  </section>
+
+  <footer>
+    <p>Data hentes fra Rejseplanen via afgangstavler på ca. 47 stationer, der tilsammen dækker alle strækninger i Danmark.
+    Et tog tæller som <strong>til tiden</strong> ved under 3 minutters forsinkelse, <strong>før tid</strong> ved afgang meldt mere end 1 minut tidligt.
+    Uofficiel hobbyside – tjek altid <a href="https://www.rejseplanen.dk">Rejseplanen</a> før afgang.</p>
+  </footer>
+</div>
+<script src="app.js"></script>
+</body>
+</html>
