@@ -111,6 +111,24 @@ section > h2 {
   margin-bottom: 12px;
 }
 
+.datelabel {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--text-secondary);
+  font-size: 0.85rem;
+}
+
+.controls input[type="date"] {
+  padding: 6px 8px;
+  font: inherit;
+  font-size: 0.85rem;
+  color: var(--text-primary);
+  background: var(--surface-1);
+  border: 1px solid var(--baseline);
+  border-radius: 8px;
+}
+
 .controls input[type="search"] {
   flex: 1 1 260px;
   padding: 8px 12px;

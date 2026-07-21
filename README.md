@@ -15,6 +15,9 @@ Selvopdaterende database og website med overblik over, om togene i Danmark køre
    - `docs/data/latest.json` – øjebliksbillede til live-tabellen
    - `docs/data/stats.json` – aggregeret statistik (pr. dag, time, linje,
      togtype, operatør) + automatisk genererede tips
+   - `docs/data/days/` + `docs/data/index.json` – kompakte dagsfiler til
+     historik-sektionen, hvor man kan bladre i datoer eller vælge en
+     fra/til-periode med egne tabeller, grafer og nøgletal
 3. **Automatik:** GitHub Actions (`.github/workflows/update-data.yml`) kører
    **hver time** kl. xx:07 (UTC 03–23), henter friske data og committer dem.
 4. **Website:** `docs/` er en statisk side med søgbar afgangstabel, KPI'er,
@@ -28,7 +31,8 @@ Selvopdaterende database og website med overblik over, om togene i Danmark køre
 
 ```bash
 npm ci
-node scripts/fetch.js        # henter data (kræver internetadgang)
+node scripts/fetch.js            # henter data (kræver internetadgang)
+node scripts/fetch.js --offline  # genberegner kun docs/data/* fra data/days/
 python3 -m http.server -d docs 8000   # åbn http://localhost:8000
 ```
 

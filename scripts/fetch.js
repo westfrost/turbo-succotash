@@ -303,6 +303,41 @@ function buildTips(stats, allRecs) {
   return tips;
 }
 
+// Udgiver en kompakt udgave af hver dagsfil til websitet (docs/data/days/)
+// plus et indeks over tilgængelige datoer, så historik-sektionen kan bladre.
+async function publishDays() {
+  const files = existsSync(DAYS_DIR)
+    ? readdirSync(DAYS_DIR).filter((f) => f.endsWith('.json')).sort().slice(-HISTORY_DAYS)
+    : [];
+  const dates = [];
+  for (const f of files) {
+    const date = f.replace('.json', '');
+    const dayMap = await readJson(path.join(DAYS_DIR, f), {});
+    const trains = Object.values(dayMap)
+      .map((r) => ({
+        line: r.line,
+        product: r.product,
+        operator: r.operator,
+        direction: r.direction,
+        station: r.lastStation ?? null,
+        planned: r.planned,
+        hour: r.hour,
+        delay: r.lastDelay ?? null,
+        maxDelay: r.maxDelay ?? null,
+        cancelled: Boolean(r.cancelled),
+        status: statusOf(r.lastDelay, r.cancelled),
+      }))
+      .sort((a, b) => (a.planned ?? '').localeCompare(b.planned ?? ''));
+    await writeJson(path.join(DOCS_DATA, 'days', `${date}.json`), {date, trains});
+    dates.push(date);
+  }
+  await writeJson(path.join(DOCS_DATA, 'index.json'), {
+    generatedAt: new Date().toISOString(),
+    dates,
+  });
+  return dates.length;
+}
+
 async function buildStats() {
   const files = existsSync(DAYS_DIR)
     ? readdirSync(DAYS_DIR).filter((f) => f.endsWith('.json')).sort().slice(-HISTORY_DAYS)
@@ -335,30 +370,37 @@ async function buildStats() {
 
 // ---------- main ----------
 
+// --offline springer datahentningen over og genberegner kun udgivne filer
+// (docs/data/*) fra de eksisterende dagsfiler i data/days/.
+const OFFLINE = process.argv.includes('--offline');
 const nowIso = new Date().toISOString();
 const today = dkParts().date;
 
-console.log(`== dk-togstatus ${nowIso} (${today}) ==`);
-const stations = await resolveStations();
-if (stations.length === 0) throw new Error('Ingen stationer kunne slås op.');
-console.log(`${stations.length} stationer i brug.`);
+console.log(`== dk-togstatus ${nowIso} (${today})${OFFLINE ? ' [offline]' : ''} ==`);
 
-const deps = await fetchAllDepartures(stations);
-console.log(`${deps.length} afgange hentet i alt.`);
+if (!OFFLINE) {
+  const stations = await resolveStations();
+  if (stations.length === 0) throw new Error('Ingen stationer kunne slås op.');
+  console.log(`${stations.length} stationer i brug.`);
 
-const dayFile = path.join(DAYS_DIR, `${today}.json`);
-const dayMap = await readJson(dayFile, {});
-const latest = mergeIntoDay(dayMap, deps, nowIso);
-// Afgange kort efter midnat kan høre til i morgendagens fil – de lander via
-// rec.date, men vi gemmer alt i dags-filen for den dag, kørslen skete.
-await writeJson(dayFile, dayMap);
-console.log(`${Object.keys(dayMap).length} unikke tog registreret for ${today}.`);
+  const deps = await fetchAllDepartures(stations);
+  console.log(`${deps.length} afgange hentet i alt.`);
 
-await writeJson(path.join(DOCS_DATA, 'latest.json'), {
-  generatedAt: nowIso,
-  trains: latest,
-});
+  const dayFile = path.join(DAYS_DIR, `${today}.json`);
+  const dayMap = await readJson(dayFile, {});
+  const latest = mergeIntoDay(dayMap, deps, nowIso);
+  // Afgange kort efter midnat kan høre til i morgendagens fil – de lander via
+  // rec.date, men vi gemmer alt i dags-filen for den dag, kørslen skete.
+  await writeJson(dayFile, dayMap);
+  console.log(`${Object.keys(dayMap).length} unikke tog registreret for ${today}.`);
 
+  await writeJson(path.join(DOCS_DATA, 'latest.json'), {
+    generatedAt: nowIso,
+    trains: latest,
+  });
+}
+
+const publishedDays = await publishDays();
 const stats = await buildStats();
 await writeJson(path.join(DOCS_DATA, 'stats.json'), stats);
-console.log(`Statistik genereret for ${stats.periodDays} dage. Færdig.`);
+console.log(`Statistik genereret for ${stats.periodDays} dage, ${publishedDays} dagsfiler udgivet. Færdig.`);

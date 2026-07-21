@@ -257,6 +257,322 @@
     }));
   }
 
+  // ---------- historik: bladre i datoer / fra-til-periode ----------
+
+  let histIndex = []; // tilgængelige datoer (sorteret)
+  let histFrom = null;
+  let histTo = null;
+  const histCache = new Map(); // dato -> togliste
+  let histCharts = [];
+  let histTrains = [];
+  let histMultiDay = false;
+
+  const dayMs = 86400000;
+  const toDate = (s) => new Date(s + 'T00:00:00Z');
+  const toStr = (d) => d.toISOString().slice(0, 10);
+  const shiftDate = (s, days) => toStr(new Date(toDate(s).getTime() + days * dayMs));
+  const datesBetween = (from, to) => {
+    const out = [];
+    for (let d = toDate(from); d <= toDate(to); d = new Date(d.getTime() + dayMs)) out.push(toStr(d));
+    return out;
+  };
+  const longDate = new Intl.DateTimeFormat('da-DK', {day: 'numeric', month: 'long', year: 'numeric'});
+  const shortDateTime = new Intl.DateTimeFormat('da-DK', {
+    timeZone: 'Europe/Copenhagen', day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit',
+  });
+
+  function aggregate(trains) {
+    const s = {total: 0, tiltiden: 0, foertid: 0, forsinket: 0, aflyst: 0, ukendt: 0, delaySum: 0, delayN: 0};
+    for (const t of trains) {
+      s.total++;
+      s[t.status] = (s[t.status] ?? 0) + 1;
+      if (!t.cancelled && t.delay != null) { s.delaySum += t.delay; s.delayN++; }
+    }
+    const known = s.total - s.ukendt;
+    s.avgDelay = s.delayN ? Math.round(s.delaySum / s.delayN) : null;
+    s.punctuality = known > 0 ? Math.round(((s.tiltiden + s.foertid) / known) * 1000) / 10 : null;
+    return s;
+  }
+
+  function groupBy(trains, keyFn) {
+    const m = new Map();
+    for (const t of trains) {
+      const k = keyFn(t);
+      if (k == null) continue;
+      if (!m.has(k)) m.set(k, []);
+      m.get(k).push(t);
+    }
+    return m;
+  }
+
+  async function histFetchDays(dates) {
+    await Promise.all(dates.filter((d) => !histCache.has(d)).map(async (d) => {
+      try {
+        const r = await fetch(`data/days/${d}.json`);
+        histCache.set(d, r.ok ? (await r.json()).trains ?? [] : []);
+      } catch {
+        histCache.set(d, []);
+      }
+    }));
+  }
+
+  async function histApply() {
+    if (!histIndex.length) return;
+    // hold inputs inden for det tilgængelige interval og i rigtig rækkefølge
+    const min = histIndex[0];
+    const max = histIndex.at(-1);
+    histFrom = histFrom < min ? min : histFrom > max ? max : histFrom;
+    histTo = histTo < min ? min : histTo > max ? max : histTo;
+    if (histFrom > histTo) [histFrom, histTo] = [histTo, histFrom];
+    document.getElementById('histFrom').value = histFrom;
+    document.getElementById('histTo').value = histTo;
+    document.getElementById('histPrev').disabled = histFrom <= min;
+    document.getElementById('histNext').disabled = histTo >= max;
+
+    const dates = datesBetween(histFrom, histTo);
+    await histFetchDays(dates);
+    histTrains = dates.flatMap((d) => (histCache.get(d) ?? []).map((t) => ({...t, date: d})));
+    histMultiDay = histFrom !== histTo;
+    const missing = dates.filter((d) => !histIndex.includes(d)).length;
+
+    const label = histMultiDay
+      ? `${longDate.format(toDate(histFrom))} – ${longDate.format(toDate(histTo))}`
+      : longDate.format(toDate(histFrom));
+    document.getElementById('histInfo').textContent =
+      `${label} · ${histTrains.length.toLocaleString('da-DK')} tog` +
+      (missing ? ` · ${missing} dag(e) uden data` : '');
+
+    renderHistKpis();
+    renderHistCharts();
+    renderHistTable();
+  }
+
+  function renderHistKpis() {
+    const s = aggregate(histTrains);
+    document.getElementById('histKpis').innerHTML = [
+      ['Tog', s.total.toLocaleString('da-DK'), ''],
+      ['Til tiden', pct(s.punctuality), 'inkl. før tid'],
+      ['Forsinkede', s.forsinket.toLocaleString('da-DK'), '≥ 3 min'],
+      ['Aflyste', s.aflyst.toLocaleString('da-DK'), ''],
+      ['Gns. forsinkelse', fmtDelay(s.avgDelay), 'tog med realtid'],
+    ].map(([l, v, h]) => `
+      <div class="card kpi">
+        <div class="label">${l}</div>
+        <div class="value">${v}</div>
+        <div class="hint">${h}</div>
+      </div>`).join('');
+  }
+
+  function renderHistCharts() {
+    histCharts.forEach((ch) => ch.destroy());
+    histCharts = [];
+    if (!histTrains.length && !histIndex.length) return;
+    const c = chartColors();
+    const s = aggregate(histTrains);
+
+    // Status i perioden – stablet vandret bjælke i statusfarver
+    document.getElementById('histStatusDesc').textContent = histMultiDay
+      ? 'Fordeling af registrerede tog i perioden' : 'Fordeling af dagens registrerede tog';
+    if (chartOrNotice('histStatus', histTrains)) {
+      const parts = [
+        ['tiltiden', c.good], ['foertid', c.warning],
+        ['forsinket', c.serious], ['aflyst', c.critical], ['ukendt', c.muted],
+      ].filter(([k]) => s[k] > 0);
+      const opts = baseOptions(c, {horizontal: true});
+      opts.plugins.legend = {display: true, position: 'bottom', labels: {color: c.text, boxWidth: 12, boxHeight: 12}};
+      opts.scales.x.stacked = true;
+      opts.scales.y.stacked = true;
+      histCharts.push(new Chart(document.getElementById('histStatus'), {
+        type: 'bar',
+        data: {
+          labels: [histMultiDay ? 'Perioden' : 'Dagen'],
+          datasets: parts.map(([k, color]) => ({
+            label: `${STATUS_LABELS[k]} (${s[k]})`,
+            data: [s[k]],
+            backgroundColor: color,
+            borderColor: c.surface,
+            borderWidth: 2,
+            barThickness: 34,
+          })),
+        },
+        options: opts,
+      }));
+    }
+
+    // Punktlighed pr. dag – kun relevant for flerdages-perioder
+    const daysCard = document.getElementById('histDaysCard');
+    if (histMultiDay) {
+      daysCard.style.display = '';
+      const perDay = [...groupBy(histTrains, (t) => t.date).entries()]
+        .map(([d, ts]) => ({date: d, ...aggregate(ts)}))
+        .filter((d) => d.punctuality != null)
+        .sort((a, b) => a.date.localeCompare(b.date));
+      if (chartOrNotice('histDays', perDay)) {
+        histCharts.push(new Chart(document.getElementById('histDays'), {
+          type: 'line',
+          data: {
+            labels: perDay.map((d) => dayFmt.format(toDate(d.date))),
+            datasets: [{
+              label: 'Til tiden',
+              data: perDay.map((d) => d.punctuality),
+              borderColor: c.blue,
+              backgroundColor: c.blue,
+              borderWidth: 2,
+              pointRadius: perDay.length > 20 ? 2.5 : 4,
+              tension: 0.25,
+            }],
+          },
+          options: baseOptions(c, {percentAxis: true}),
+        }));
+      }
+    } else {
+      daysCard.style.display = 'none';
+    }
+
+    // Punktlighed pr. time
+    const perHour = [...groupBy(histTrains, (t) => t.hour).entries()]
+      .map(([h, ts]) => ({hour: Number(h), ...aggregate(ts)}))
+      .filter((h) => h.total >= 5 && h.punctuality != null)
+      .sort((a, b) => a.hour - b.hour);
+    if (chartOrNotice('histHours', perHour)) {
+      const o = baseOptions(c, {percentAxis: true});
+      o.scales.x.title = {display: true, text: 'Afgangstime', color: c.muted};
+      histCharts.push(new Chart(document.getElementById('histHours'), {
+        type: 'bar',
+        data: {
+          labels: perHour.map((h) => String(h.hour)),
+          datasets: [{
+            label: 'Til tiden',
+            data: perHour.map((h) => h.punctuality),
+            backgroundColor: c.blue,
+            borderRadius: {topLeft: 4, topRight: 4},
+            borderSkipped: 'start',
+            maxBarThickness: 22,
+          }],
+        },
+        options: o,
+      }));
+    }
+
+    // Punktlighed pr. togtype
+    const perProduct = [...groupBy(histTrains, (t) => t.product).entries()]
+      .map(([p, ts]) => ({key: p, ...aggregate(ts)}))
+      .filter((p) => p.punctuality != null)
+      .sort((a, b) => b.total - a.total);
+    if (chartOrNotice('histProducts', perProduct)) {
+      histCharts.push(new Chart(document.getElementById('histProducts'), {
+        type: 'bar',
+        data: {
+          labels: perProduct.map((p) => p.key),
+          datasets: [{
+            label: 'Til tiden',
+            data: perProduct.map((p) => p.punctuality),
+            backgroundColor: c.blue,
+            borderRadius: {topRight: 4, bottomRight: 4},
+            borderSkipped: 'start',
+            maxBarThickness: 22,
+          }],
+        },
+        options: baseOptions(c, {horizontal: true, percentAxis: true}),
+      }));
+    }
+
+    // Mest forsinkede linjer i perioden
+    const worst = [...groupBy(histTrains, (t) => t.line).entries()]
+      .map(([l, ts]) => ({key: l, ...aggregate(ts)}))
+      .filter((l) => l.total >= 10 && l.punctuality != null)
+      .sort((a, b) => a.punctuality - b.punctuality)
+      .slice(0, 10);
+    if (chartOrNotice('histLines', worst)) {
+      histCharts.push(new Chart(document.getElementById('histLines'), {
+        type: 'bar',
+        data: {
+          labels: worst.map((l) => l.key),
+          datasets: [{
+            label: 'Til tiden',
+            data: worst.map((l) => l.punctuality),
+            backgroundColor: c.blueSoft,
+            borderRadius: {topRight: 4, bottomRight: 4},
+            borderSkipped: 'start',
+            maxBarThickness: 18,
+          }],
+        },
+        options: baseOptions(c, {horizontal: true, percentAxis: true}),
+      }));
+    }
+  }
+
+  function renderHistTable() {
+    const q = document.getElementById('histSearch').value.trim().toLowerCase();
+    const rows = histTrains.filter((t) => !q ||
+      [t.line, t.direction, t.station, t.operator, t.product]
+        .some((x) => (x ?? '').toLowerCase().includes(q)));
+    document.querySelector('#histTable tbody').innerHTML = rows.slice(0, 300).map((t) => `
+      <tr>
+        <td><strong>${esc(t.line)}</strong><br><small style="color:var(--text-muted)">${esc(t.product)}</small></td>
+        <td>${esc(t.direction)}</td>
+        <td>${esc(t.station ?? '–')}</td>
+        <td class="num">${t.planned ? (histMultiDay ? shortDateTime.format(new Date(t.planned)) : fmtTime(t.planned)) : '–'}</td>
+        <td class="num">${t.cancelled ? '–' : fmtDelay(t.delay)}</td>
+        <td class="num">${t.cancelled || t.maxDelay == null ? '–' : fmtDelay(t.maxDelay)}</td>
+        <td><span class="badge ${t.status}">${STATUS_LABELS[t.status] ?? t.status}</span></td>
+      </tr>`).join('');
+    document.getElementById('histCount').textContent =
+      rows.length === 0 ? 'Ingen tog matcher.' :
+      `${rows.length.toLocaleString('da-DK')} tog${rows.length > 300 ? ' (viser de første 300)' : ''}.`;
+  }
+
+  async function histInit() {
+    try {
+      const r = await fetch('data/index.json');
+      histIndex = r.ok ? (await r.json()).dates ?? [] : [];
+    } catch {
+      histIndex = [];
+    }
+    if (!histIndex.length) {
+      document.getElementById('histInfo').textContent =
+        'Ingen historik endnu – dagsfilerne dukker op efter næste dataopdatering.';
+      return;
+    }
+    const min = histIndex[0];
+    const max = histIndex.at(-1);
+    for (const el of [document.getElementById('histFrom'), document.getElementById('histTo')]) {
+      el.min = min;
+      el.max = max;
+    }
+    histFrom = histTo = max;
+    await histApply();
+  }
+
+  document.getElementById('histFrom').addEventListener('change', (e) => {
+    if (e.target.value) { histFrom = e.target.value; histApply(); }
+  });
+  document.getElementById('histTo').addEventListener('change', (e) => {
+    if (e.target.value) { histTo = e.target.value; histApply(); }
+  });
+  document.getElementById('histPrev').addEventListener('click', () => {
+    const span = datesBetween(histFrom, histTo).length;
+    histFrom = shiftDate(histFrom, -span);
+    histTo = shiftDate(histTo, -span);
+    histApply();
+  });
+  document.getElementById('histNext').addEventListener('click', () => {
+    const span = datesBetween(histFrom, histTo).length;
+    histFrom = shiftDate(histFrom, span);
+    histTo = shiftDate(histTo, span);
+    histApply();
+  });
+  document.querySelectorAll('.preset').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      if (!histIndex.length) return;
+      const n = Number(btn.dataset.days);
+      histTo = histIndex.at(-1);
+      histFrom = n === 0 ? histIndex[0] : shiftDate(histTo, -(n - 1));
+      histApply();
+    });
+  });
+  document.getElementById('histSearch').addEventListener('input', renderHistTable);
+
   // ---------- tabelvisning af dagsdata ----------
 
   function renderDayTable() {
@@ -309,7 +625,11 @@
       renderTable();
     });
   });
-  window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', renderCharts);
+  window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => {
+    renderCharts();
+    renderHistCharts();
+  });
 
   load();
+  histInit();
 })();

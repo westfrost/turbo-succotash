@@ -6,13 +6,6 @@ on:
     # (Cron kører kun på default-branchen, dvs. efter merge til main.)
     - cron: '7 3-23 * * *'
   workflow_dispatch:
-  push:
-    branches:
-      - claude/danish-train-status-db-4l090g
-    paths:
-      - 'scripts/**'
-      - 'package.json'
-      - '.github/workflows/update-data.yml'
 
 permissions:
   contents: write
