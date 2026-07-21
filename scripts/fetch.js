@@ -18,7 +18,8 @@ const TZ = 'Europe/Copenhagen';
 // til tiden = mindre end 3 minutter forsinket. Før tid = afgang meldt >1 min tidligt.
 const DELAYED_THRESHOLD = 180; // sekunder
 const EARLY_THRESHOLD = -60; // sekunder
-const HISTORY_DAYS = 45; // så mange dage indgår i statistikken
+// Al historik gemmes for altid - dagsfilerne er små tekstfiler, og både
+// statistik og udgivne dagsfiler dækker hele perioden uden loft.
 
 const client = createClient(rejseplanenProfile, 'dk-togstatus (github.com/westfrost/turbo-succotash)');
 
@@ -307,7 +308,7 @@ function buildTips(stats, allRecs) {
 // plus et indeks over tilgængelige datoer, så historik-sektionen kan bladre.
 async function publishDays() {
   const files = existsSync(DAYS_DIR)
-    ? readdirSync(DAYS_DIR).filter((f) => f.endsWith('.json')).sort().slice(-HISTORY_DAYS)
+    ? readdirSync(DAYS_DIR).filter((f) => f.endsWith('.json')).sort()
     : [];
   const dates = [];
   for (const f of files) {
@@ -340,7 +341,7 @@ async function publishDays() {
 
 async function buildStats() {
   const files = existsSync(DAYS_DIR)
-    ? readdirSync(DAYS_DIR).filter((f) => f.endsWith('.json')).sort().slice(-HISTORY_DAYS)
+    ? readdirSync(DAYS_DIR).filter((f) => f.endsWith('.json')).sort()
     : [];
   const perDay = [];
   const allRecs = [];
