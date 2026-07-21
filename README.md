@@ -17,19 +17,12 @@ Selvopdaterende database og website med overblik over, om togene i Danmark køre
      togtype, operatør) + automatisk genererede tips
 3. **Automatik:** GitHub Actions (`.github/workflows/update-data.yml`) kører
    **hver time** kl. xx:07 (UTC 03–23), henter friske data og committer dem.
-4. **Website:** `docs/` er en statisk side (GitHub Pages) med søgbar
-   afgangstabel, KPI'er, grafer og tips. Deployes automatisk af
-   `.github/workflows/pages.yml`, når data eller siden ændres på `main`.
+4. **Website:** `docs/` er en statisk side med søgbar afgangstabel, KPI'er,
+   grafer og tips. `.github/workflows/pages.yml` spejler `docs/` til
+   `gh-pages`-branchen, som GitHub Pages serverer, hver gang data eller siden
+   ændres på `main`.
 
-## Kom i gang
-
-1. **Merge til `main`** – planlagte (cron) workflows kører kun på
-   default-branchen.
-2. **Slå GitHub Pages til:** Settings → Pages → Source: **GitHub Actions**.
-3. Kør evt. workflowet **"Opdater togdata"** manuelt (Actions → Run workflow)
-   for at få det første datasæt med det samme.
-
-Websitet ligger derefter på `https://<ejer>.github.io/turbo-succotash/`.
+**Websitet er live på: https://westfrost.github.io/turbo-succotash/**
 
 ### Lokal kørsel
 
