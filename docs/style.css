@@ -244,6 +244,20 @@ details.tableview summary {
   font-style: italic;
 }
 
+#histMap {
+  height: 420px;
+  border-radius: 8px;
+  z-index: 0;
+}
+
+.maplegend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 14px;
+  margin: 10px 0 0;
+  font-size: 0.82rem;
+}
+
 footer {
   margin-top: 40px;
   color: var(--text-muted);

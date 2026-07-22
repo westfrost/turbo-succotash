@@ -8,6 +8,8 @@
 <link rel="stylesheet" href="style.css">
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🚆</text></svg>">
 <script src="vendor/chart.umd.min.js"></script>
+<link rel="stylesheet" href="vendor/leaflet/leaflet.css">
+<script src="vendor/leaflet/leaflet.js"></script>
 </head>
 <body>
 <div class="wrap">
@@ -93,10 +95,49 @@
         <p class="desc">Laveste andel til tiden i perioden (min. 10 tog)</p>
         <div class="chart-box tall"><canvas id="histLines"></canvas></div>
       </div>
+      <div class="card chart-card">
+        <h3>Punktlighed efter vejr</h3>
+        <p class="desc">Dagene grupperet efter vejrtype (Open-Meteo)</p>
+        <div class="chart-box"><canvas id="histWeather"></canvas></div>
+      </div>
+      <div class="card chart-card">
+        <h3>Punktlighed pr. ugedag</h3>
+        <p class="desc">I den valgte periode</p>
+        <div class="chart-box"><canvas id="histWeekdays"></canvas></div>
+      </div>
+      <div class="card chart-card">
+        <h3>Forsinkelsesårsager</h3>
+        <p class="desc">Fra Rejseplanens bemærkninger, antal tog i perioden</p>
+        <div class="chart-box"><canvas id="histCauses"></canvas></div>
+      </div>
+      <div class="card chart-card" style="grid-column: 1 / -1;">
+        <h3>Danmarkskort</h3>
+        <p class="desc">Punktlighed pr. station i perioden – klik på en station for detaljer</p>
+        <div id="histMap"></div>
+        <p class="maplegend">
+          <span class="badge tiltiden">≥ 90 %</span>
+          <span class="badge foertid">75–90 %</span>
+          <span class="badge forsinket">50–75 %</span>
+          <span class="badge aflyst">&lt; 50 %</span>
+          <span class="notice">· prikstørrelse = antal tog</span>
+        </p>
+      </div>
+      <div class="card chart-card" style="grid-column: 1 / -1;">
+        <h3>🏆 Største forsinkelser i perioden</h3>
+        <div class="table-scroll">
+          <table id="histRecords">
+            <thead>
+              <tr><th>#</th><th>Dato</th><th>Tog</th><th>Retning</th><th>Sidst set</th><th class="num">Maks. forsinkelse</th><th>Årsag</th></tr>
+            </thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </div>
     </div>
     <div class="card" style="margin-top:16px;">
       <div class="controls">
         <input type="search" id="histSearch" placeholder="Søg i periodens tog – linje, station, retning, operatør…" aria-label="Søg i historik">
+        <button class="chip" id="histCsv" title="Download den viste liste som CSV">⬇ CSV</button>
       </div>
       <div class="table-scroll">
         <table id="histTable">
@@ -104,7 +145,7 @@
             <tr>
               <th>Tog</th><th>Retning</th><th>Sidst set</th>
               <th class="num">Planlagt</th><th class="num">Forsinkelse</th>
-              <th class="num">Maks.</th><th>Status</th>
+              <th class="num">Maks.</th><th>Status</th><th>Årsag</th>
             </tr>
           </thead>
           <tbody></tbody>

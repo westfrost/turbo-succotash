@@ -193,9 +193,20 @@
           borderWidth: 2,
           pointRadius: days.length > 20 ? 2.5 : 4,
           tension: 0.25,
+        }, {
+          label: 'DSB-mål (ca. 90 %)',
+          data: days.map(() => 90),
+          borderColor: c.muted,
+          borderDash: [6, 4],
+          borderWidth: 1.5,
+          pointRadius: 0,
         }],
       },
-      options: baseOptions(c, {percentAxis: true}),
+      options: (() => {
+        const o = baseOptions(c, {percentAxis: true});
+        o.plugins.legend = {display: true, position: 'bottom', labels: {color: c.text, boxWidth: 12, boxHeight: 12}};
+        return o;
+      })(),
     }));
 
     // 3) Punktlighed pr. time – søjler
@@ -309,11 +320,19 @@
     await Promise.all(dates.filter((d) => !histCache.has(d)).map(async (d) => {
       try {
         const r = await fetch(`data/days/${d}.json`);
-        histCache.set(d, r.ok ? (await r.json()).trains ?? [] : []);
+        const file = r.ok ? await r.json() : {};
+        histCache.set(d, {trains: file.trains ?? [], weather: file.weather ?? null});
       } catch {
-        histCache.set(d, []);
+        histCache.set(d, {trains: [], weather: null});
       }
     }));
+  }
+
+  const WEATHER_LABELS = {'tørt': '☀️ Tørt', 'regn': '🌧️ Regn', 'blæst': '💨 Blæst', 'sne': '❄️ Sne'};
+
+  function weatherText(w) {
+    if (!w) return null;
+    return `${WEATHER_LABELS[w.category] ?? w.category} · vindstød op til ${Math.round(w.maxGust)} m/s · ${String(w.precipSum).replace('.', ',')} mm nedbør · ${Math.round(w.tmin)}–${Math.round(w.tmax)} °C`;
   }
 
   async function histApply() {
@@ -329,21 +348,28 @@
     document.getElementById('histPrev').disabled = histFrom <= min;
     document.getElementById('histNext').disabled = histTo >= max;
 
+    // delbart link: periode i URL'en
+    history.replaceState(null, '', `?fra=${histFrom}&til=${histTo}`);
+
     const dates = datesBetween(histFrom, histTo);
     await histFetchDays(dates);
-    histTrains = dates.flatMap((d) => (histCache.get(d) ?? []).map((t) => ({...t, date: d})));
+    histTrains = dates.flatMap((d) => (histCache.get(d)?.trains ?? []).map((t) => ({...t, date: d})));
     histMultiDay = histFrom !== histTo;
     const missing = dates.filter((d) => !histIndex.includes(d)).length;
 
     const label = histMultiDay
       ? `${longDate.format(toDate(histFrom))} – ${longDate.format(toDate(histTo))}`
       : longDate.format(toDate(histFrom));
+    const weather = !histMultiDay ? weatherText(histCache.get(histFrom)?.weather) : null;
     document.getElementById('histInfo').textContent =
       `${label} · ${histTrains.length.toLocaleString('da-DK')} tog` +
-      (missing ? ` · ${missing} dag(e) uden data` : '');
+      (missing ? ` · ${missing} dag(e) uden data` : '') +
+      (weather ? ` · ${weather}` : '');
 
     renderHistKpis();
     renderHistCharts();
+    renderHistMap();
+    renderHistRecords();
     renderHistTable();
   }
 
@@ -408,6 +434,14 @@
         .filter((d) => d.punctuality != null)
         .sort((a, b) => a.date.localeCompare(b.date));
       if (chartOrNotice('histDays', perDay)) {
+        const o = baseOptions(c, {percentAxis: true});
+        o.plugins.legend = {display: true, position: 'bottom', labels: {color: c.text, boxWidth: 12, boxHeight: 12}};
+        o.plugins.tooltip.callbacks = {
+          afterBody: (items) => {
+            const w = histCache.get(perDay[items[0]?.dataIndex]?.date)?.weather;
+            return weatherText(w) ?? '';
+          },
+        };
         histCharts.push(new Chart(document.getElementById('histDays'), {
           type: 'line',
           data: {
@@ -420,9 +454,16 @@
               borderWidth: 2,
               pointRadius: perDay.length > 20 ? 2.5 : 4,
               tension: 0.25,
+            }, {
+              label: 'DSB-mål (ca. 90 %)',
+              data: perDay.map(() => 90),
+              borderColor: c.muted,
+              borderDash: [6, 4],
+              borderWidth: 1.5,
+              pointRadius: 0,
             }],
           },
-          options: baseOptions(c, {percentAxis: true}),
+          options: o,
         }));
       }
     } else {
@@ -500,6 +541,180 @@
         options: baseOptions(c, {horizontal: true, percentAxis: true}),
       }));
     }
+
+    // Punktlighed efter vejrtype (dage grupperet på kategori)
+    const byWeather = new Map();
+    for (const d of datesBetween(histFrom, histTo)) {
+      const file = histCache.get(d);
+      if (!file?.weather || !file.trains.length) continue;
+      const cat = file.weather.category;
+      if (!byWeather.has(cat)) byWeather.set(cat, {trains: [], days: 0});
+      byWeather.get(cat).trains.push(...file.trains);
+      byWeather.get(cat).days++;
+    }
+    const weatherRows = [...byWeather.entries()]
+      .map(([cat, v]) => ({cat, days: v.days, ...aggregate(v.trains)}))
+      .filter((w) => w.punctuality != null);
+    if (chartOrNotice('histWeather', weatherRows)) {
+      histCharts.push(new Chart(document.getElementById('histWeather'), {
+        type: 'bar',
+        data: {
+          labels: weatherRows.map((w) => `${WEATHER_LABELS[w.cat] ?? w.cat} (${w.days} d.)`),
+          datasets: [{
+            label: 'Til tiden',
+            data: weatherRows.map((w) => w.punctuality),
+            backgroundColor: c.blue,
+            borderRadius: {topLeft: 4, topRight: 4},
+            borderSkipped: 'start',
+            maxBarThickness: 40,
+          }],
+        },
+        options: baseOptions(c, {percentAxis: true}),
+      }));
+    }
+
+    // Punktlighed pr. ugedag
+    const WEEKDAYS = ['man', 'tir', 'ons', 'tor', 'fre', 'lør', 'søn'];
+    const byWeekday = [...groupBy(histTrains, (t) => (toDate(t.date).getUTCDay() + 6) % 7).entries()]
+      .map(([wd, ts]) => ({wd: Number(wd), ...aggregate(ts)}))
+      .filter((w) => w.punctuality != null)
+      .sort((a, b) => a.wd - b.wd);
+    if (chartOrNotice('histWeekdays', histMultiDay ? byWeekday : [])) {
+      histCharts.push(new Chart(document.getElementById('histWeekdays'), {
+        type: 'bar',
+        data: {
+          labels: byWeekday.map((w) => WEEKDAYS[w.wd]),
+          datasets: [{
+            label: 'Til tiden',
+            data: byWeekday.map((w) => w.punctuality),
+            backgroundColor: c.blue,
+            borderRadius: {topLeft: 4, topRight: 4},
+            borderSkipped: 'start',
+            maxBarThickness: 30,
+          }],
+        },
+        options: baseOptions(c, {percentAxis: true}),
+      }));
+    }
+
+    // Forsinkelsesårsager (antal tog med bemærkning)
+    const causes = [...groupBy(histTrains.filter((t) => t.cause), (t) => t.cause).entries()]
+      .map(([k, ts]) => ({key: k, n: ts.length}))
+      .sort((a, b) => b.n - a.n)
+      .slice(0, 8);
+    if (chartOrNotice('histCauses', causes)) {
+      histCharts.push(new Chart(document.getElementById('histCauses'), {
+        type: 'bar',
+        data: {
+          labels: causes.map((x) => x.key),
+          datasets: [{
+            label: 'Antal tog',
+            data: causes.map((x) => x.n),
+            backgroundColor: c.blue,
+            borderRadius: {topRight: 4, bottomRight: 4},
+            borderSkipped: 'start',
+            maxBarThickness: 20,
+          }],
+        },
+        options: baseOptions(c, {horizontal: true}),
+      }));
+    }
+  }
+
+  // ---------- danmarkskort ----------
+
+  let stationCoords = null; // name -> {lat, lon}
+  let map = null;
+  let tileLayer = null;
+  let markerLayer = null;
+
+  function setTiles() {
+    if (!map) return;
+    const dark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+    const url = dark
+      ? 'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png'
+      : 'https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png';
+    if (tileLayer) map.removeLayer(tileLayer);
+    tileLayer = L.tileLayer(url, {
+      attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> &copy; <a href="https://carto.com/">CARTO</a>',
+      maxZoom: 12,
+    }).addTo(map);
+  }
+
+  function renderHistMap() {
+    const el = document.getElementById('histMap');
+    if (typeof L === 'undefined' || !stationCoords || !Object.keys(stationCoords).length) {
+      el.closest('.chart-card').style.display = 'none';
+      return;
+    }
+    el.closest('.chart-card').style.display = '';
+    if (!map) {
+      map = L.map('histMap', {scrollWheelZoom: false}).setView([56.05, 10.8], 6);
+      markerLayer = L.layerGroup().addTo(map);
+      setTiles();
+    }
+    markerLayer.clearLayers();
+    const perStation = [...groupBy(histTrains, (t) => t.station).entries()]
+      .map(([name, ts]) => ({name, ...aggregate(ts)}))
+      .filter((s) => s.total >= 3 && s.punctuality != null);
+    for (const s of perStation) {
+      const pos = stationCoords[s.name];
+      if (!pos) continue;
+      const color = s.punctuality >= 90 ? cssVar('--status-good')
+        : s.punctuality >= 75 ? cssVar('--status-warning')
+        : s.punctuality >= 50 ? cssVar('--status-serious')
+        : cssVar('--status-critical');
+      L.circleMarker([pos.lat, pos.lon], {
+        radius: Math.min(16, 5 + Math.sqrt(s.total)),
+        color,
+        weight: 2,
+        fillColor: color,
+        fillOpacity: 0.55,
+      }).bindPopup(
+        `<strong>${esc(s.name)}</strong><br>${s.total} tog · ${pct(s.punctuality)} til tiden` +
+        `<br>Gns. forsinkelse: ${fmtDelay(s.avgDelay)}`,
+      ).addTo(markerLayer);
+    }
+  }
+
+  // ---------- rekordliste og CSV ----------
+
+  function renderHistRecords() {
+    const top = histTrains
+      .filter((t) => t.maxDelay != null && t.maxDelay > 0 && !t.cancelled)
+      .sort((a, b) => b.maxDelay - a.maxDelay)
+      .slice(0, 10);
+    document.querySelector('#histRecords tbody').innerHTML = top.map((t, i) => `
+      <tr>
+        <td>${i + 1}</td>
+        <td>${dayFmt.format(toDate(t.date))}</td>
+        <td><strong>${esc(t.line)}</strong> <small style="color:var(--text-muted)">${esc(t.product)}</small></td>
+        <td>${esc(t.direction)}</td>
+        <td>${esc(t.station ?? '–')}</td>
+        <td class="num"><strong>${fmtDelay(t.maxDelay)}</strong></td>
+        <td>${esc(t.cause ?? '–')}</td>
+      </tr>`).join('') || '<tr><td colspan="7" class="notice">Ingen forsinkelser i perioden.</td></tr>';
+  }
+
+  function exportCsv() {
+    const q = document.getElementById('histSearch').value.trim().toLowerCase();
+    const rows = histTrains.filter((t) => !q ||
+      [t.line, t.direction, t.station, t.operator, t.product]
+        .some((x) => (x ?? '').toLowerCase().includes(q)));
+    const head = ['dato', 'linje', 'togtype', 'operatør', 'retning', 'sidst_set', 'planlagt', 'forsinkelse_min', 'maks_forsinkelse_min', 'aflyst', 'status', 'årsag'];
+    const csvEsc = (v) => `"${String(v ?? '').replace(/"/g, '""')}"`;
+    const lines = rows.map((t) => [
+      t.date, t.line, t.product, t.operator, t.direction, t.station,
+      t.planned, t.delay == null ? '' : Math.round(t.delay / 60),
+      t.maxDelay == null ? '' : Math.round(t.maxDelay / 60),
+      t.cancelled ? 'ja' : 'nej', STATUS_LABELS[t.status] ?? t.status, t.cause ?? '',
+    ].map(csvEsc).join(';'));
+    const blob = new Blob(['﻿' + head.join(';') + '\n' + lines.join('\n')], {type: 'text/csv;charset=utf-8'});
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = `togstatus_${histFrom}_${histTo}.csv`;
+    a.click();
+    URL.revokeObjectURL(a.href);
   }
 
   function renderHistTable() {
@@ -516,6 +731,7 @@
         <td class="num">${t.cancelled ? '–' : fmtDelay(t.delay)}</td>
         <td class="num">${t.cancelled || t.maxDelay == null ? '–' : fmtDelay(t.maxDelay)}</td>
         <td><span class="badge ${t.status}">${STATUS_LABELS[t.status] ?? t.status}</span></td>
+        <td><small>${esc(t.cause ?? '')}</small></td>
       </tr>`).join('');
     document.getElementById('histCount').textContent =
       rows.length === 0 ? 'Ingen tog matcher.' :
@@ -524,8 +740,10 @@
 
   async function histInit() {
     try {
-      const r = await fetch('data/index.json');
-      histIndex = r.ok ? (await r.json()).dates ?? [] : [];
+      const [ri, rs] = await Promise.all([fetch('data/index.json'), fetch('data/stations.json')]);
+      histIndex = ri.ok ? (await ri.json()).dates ?? [] : [];
+      const stations = rs.ok ? await rs.json() : [];
+      stationCoords = Object.fromEntries(stations.map((s) => [s.name, {lat: s.lat, lon: s.lon}]));
     } catch {
       histIndex = [];
     }
@@ -540,7 +758,11 @@
       el.min = min;
       el.max = max;
     }
-    histFrom = histTo = max;
+    // delbart link: ?fra=ÅÅÅÅ-MM-DD&til=ÅÅÅÅ-MM-DD
+    const params = new URLSearchParams(location.search);
+    const valid = (s) => /^\d{4}-\d{2}-\d{2}$/.test(s ?? '');
+    histFrom = valid(params.get('fra')) ? params.get('fra') : max;
+    histTo = valid(params.get('til')) ? params.get('til') : histFrom;
     await histApply();
   }
 
@@ -572,6 +794,7 @@
     });
   });
   document.getElementById('histSearch').addEventListener('input', renderHistTable);
+  document.getElementById('histCsv').addEventListener('click', exportCsv);
 
   // ---------- tabelvisning af dagsdata ----------
 
@@ -628,6 +851,7 @@
   window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => {
     renderCharts();
     renderHistCharts();
+    setTiles();
   });
 
   load();
