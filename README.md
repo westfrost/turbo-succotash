@@ -1,5 +1,7 @@
 # 🚆 DK Togstatus
 
+![Punktlighed i dag](https://westfrost.github.io/turbo-succotash/badge.svg)
+
 Selvopdaterende database og website med overblik over, om togene i Danmark kører
 **til tiden**, **før tid** eller er **forsinkede**.
 

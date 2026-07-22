@@ -78,13 +78,13 @@ async function mapPool(items, limit, fn) {
   return results;
 }
 
-// ---------- stationsopslag (caches) ----------
+// ---------- stationsopslag (caches, inkl. koordinater til kortet) ----------
 
 async function resolveStations() {
   const cache = await readJson(STATIONS_CACHE, {});
   let dirty = false;
   for (const name of STATION_NAMES) {
-    if (cache[name]) continue;
+    if (cache[name]?.lat != null) continue;
     try {
       const found = await withRetry(
         () => client.locations(name, {results: 3, stops: true, addresses: false, poi: false, language: 'da'}),
@@ -92,7 +92,12 @@ async function resolveStations() {
       );
       const stop = found.find((l) => l.type === 'stop' || l.type === 'station');
       if (stop) {
-        cache[name] = {id: stop.id, name: stop.name};
+        cache[name] = {
+          id: stop.id,
+          name: stop.name,
+          lat: stop.location?.latitude ?? null,
+          lon: stop.location?.longitude ?? null,
+        };
         dirty = true;
         console.log(`Fandt station: ${name} -> ${stop.id} (${stop.name})`);
       } else {
@@ -105,6 +110,75 @@ async function resolveStations() {
   }
   if (dirty) await writeJson(STATIONS_CACHE, cache);
   return Object.values(cache);
+}
+
+// ---------- vejrdata (Open-Meteo, gratis og uden nøgle) ----------
+
+// Punkter der dækker jernbanenettet geografisk.
+const WEATHER_POINTS = [
+  [55.67, 12.57], // København
+  [55.40, 10.39], // Odense
+  [56.15, 10.20], // Aarhus
+  [57.05, 9.92],  // Aalborg
+  [55.47, 8.45],  // Esbjerg
+  [54.77, 11.87], // Nykøbing F
+];
+
+// Henter timevejr for alle punkter (2 dage tilbage + i dag) og fletter det
+// ind i data/weather/DATO.json. Pr. time gemmes landets "værste" vejr:
+// største vindstød, mest nedbør/sne samt min/max temperatur.
+async function fetchWeather() {
+  const lat = WEATHER_POINTS.map((p) => p[0]).join(',');
+  const lon = WEATHER_POINTS.map((p) => p[1]).join(',');
+  const url = 'https://api.open-meteo.com/v1/forecast'
+    + `?latitude=${lat}&longitude=${lon}`
+    + '&hourly=temperature_2m,precipitation,snowfall,wind_gusts_10m'
+    + '&windspeed_unit=ms&timezone=Europe%2FCopenhagen&past_days=2&forecast_days=1';
+  const res = await withRetry(async () => {
+    const r = await fetch(url);
+    if (!r.ok) throw new Error(`Open-Meteo svarede ${r.status}`);
+    return r.json();
+  }, 'open-meteo');
+  const points = Array.isArray(res) ? res : [res];
+
+  const byDate = {};
+  for (const p of points) {
+    const h = p.hourly;
+    for (let i = 0; i < (h?.time?.length ?? 0); i++) {
+      const date = h.time[i].slice(0, 10);
+      const hour = h.time[i].slice(11, 13);
+      const e = ((byDate[date] ??= {})[hour] ??= {gust: 0, precip: 0, snow: 0, tmin: Infinity, tmax: -Infinity});
+      e.gust = Math.round(Math.max(e.gust, h.wind_gusts_10m[i] ?? 0) * 10) / 10;
+      e.precip = Math.round(Math.max(e.precip, h.precipitation[i] ?? 0) * 10) / 10;
+      e.snow = Math.round(Math.max(e.snow, h.snowfall[i] ?? 0) * 10) / 10;
+      e.tmin = Math.min(e.tmin, h.temperature_2m[i] ?? e.tmin);
+      e.tmax = Math.max(e.tmax, h.temperature_2m[i] ?? e.tmax);
+    }
+  }
+  for (const [date, hours] of Object.entries(byDate)) {
+    const file = path.join(ROOT, 'data', 'weather', `${date}.json`);
+    const existing = await readJson(file, {});
+    await writeJson(file, {...existing, ...hours});
+  }
+  console.log(`Vejrdata gemt for ${Object.keys(byDate).length} dage.`);
+}
+
+// Sammenfatter en dags timevejr og sætter kategori (prioriteret rækkefølge).
+function weatherSummary(hours) {
+  if (!hours || !Object.keys(hours).length) return null;
+  const vals = Object.values(hours);
+  const s = {
+    maxGust: Math.max(...vals.map((v) => v.gust ?? 0)),
+    precipSum: Math.round(vals.reduce((a, v) => a + (v.precip ?? 0), 0) * 10) / 10,
+    snowSum: Math.round(vals.reduce((a, v) => a + (v.snow ?? 0), 0) * 10) / 10,
+    tmin: Math.round(Math.min(...vals.map((v) => v.tmin ?? Infinity)) * 10) / 10,
+    tmax: Math.round(Math.max(...vals.map((v) => v.tmax ?? -Infinity)) * 10) / 10,
+  };
+  s.category = s.snowSum >= 0.5 ? 'sne'
+    : s.maxGust >= 15 ? 'blæst'
+    : s.precipSum >= 3 ? 'regn'
+    : 'tørt';
+  return s;
 }
 
 // ---------- klassifikation ----------
@@ -142,6 +216,32 @@ function statusOf(delay, cancelled) {
 
 const clampDelay = (d) => (d == null ? null : Math.max(-900, Math.min(10800, d)));
 
+// Kategoriserer Rejseplanens bemærkningstekster til en kort årsag.
+const CAUSE_RULES = [
+  [/personpåkørsel|påkørsel af person/, 'Personpåkørsel'],
+  [/signal/, 'Signalfejl'],
+  [/køreledning/, 'Køreledningsfejl'],
+  [/sporarbejde|sporspærring|vedligehold/, 'Sporarbejde'],
+  [/materiel|defekt tog|togsæt/, 'Materiel'],
+  [/storm|blæst|kraftig vind|sne|isslag|oversvøm|vejr/, 'Vejrforhold'],
+  [/politi|ambulance|redning|brand/, 'Politi/redning'],
+  [/personale|bemanding/, 'Personalemangel'],
+];
+
+function causeOf(remarks) {
+  if (!Array.isArray(remarks)) return null;
+  const text = remarks
+    .filter((r) => r.type === 'warning' || r.type === 'status')
+    .map((r) => r.text ?? r.summary ?? '')
+    .join(' ')
+    .toLowerCase();
+  if (!text.trim()) return null;
+  for (const [re, label] of CAUSE_RULES) {
+    if (re.test(text)) return label;
+  }
+  return 'Andet';
+}
+
 // ---------- hentning ----------
 
 async function fetchAllDepartures(stations) {
@@ -149,7 +249,7 @@ async function fetchAllDepartures(stations) {
   const perStation = await mapPool(stations, 4, async (st) => {
     try {
       const res = await withRetry(
-        () => client.departures(st.id, {duration: 75, results: 400, remarks: false, language: 'da'}),
+        () => client.departures(st.id, {duration: 75, results: 400, remarks: true, language: 'da'}),
         `departures(${st.name})`,
       );
       const deps = Array.isArray(res) ? res : res.departures ?? [];
@@ -192,6 +292,8 @@ function mergeIntoDay(dayMap, deps, nowIso) {
     };
     rec.obs += 1;
     rec.cancelled = rec.cancelled || Boolean(d.cancelled);
+    const cause = causeOf(d.remarks);
+    if (cause && (rec.cause == null || rec.cause === 'Andet')) rec.cause = cause;
     if (d.plannedWhen <= rec.planned) {
       // tidligste observation bestemmer togets "starttidspunkt" i statistikken
       rec.planned = d.plannedWhen;
@@ -327,16 +429,46 @@ async function publishDays() {
         maxDelay: r.maxDelay ?? null,
         cancelled: Boolean(r.cancelled),
         status: statusOf(r.lastDelay, r.cancelled),
+        cause: r.cause ?? null,
       }))
       .sort((a, b) => (a.planned ?? '').localeCompare(b.planned ?? ''));
-    await writeJson(path.join(DOCS_DATA, 'days', `${date}.json`), {date, trains});
+    const weather = weatherSummary(await readJson(path.join(ROOT, 'data', 'weather', `${date}.json`), null));
+    await writeJson(path.join(DOCS_DATA, 'days', `${date}.json`), {date, weather, trains});
     dates.push(date);
   }
   await writeJson(path.join(DOCS_DATA, 'index.json'), {
     generatedAt: new Date().toISOString(),
     dates,
   });
+
+  // Stationskoordinater til danmarkskortet
+  const cache = await readJson(STATIONS_CACHE, {});
+  await writeJson(path.join(DOCS_DATA, 'stations.json'),
+    Object.values(cache)
+      .filter((s) => s.lat != null && s.lon != null)
+      .map((s) => ({name: s.name, lat: s.lat, lon: s.lon})));
+
   return dates.length;
+}
+
+// Lille SVG-badge med dagens punktlighed (docs/badge.svg)
+async function writeBadge(stats) {
+  const p = stats.days.at(-1)?.punctuality;
+  const value = p == null ? 'ingen data' : `${String(p).replace('.', ',')} %`;
+  const color = p == null ? '#898781' : p >= 90 ? '#0ca30c' : p >= 75 ? '#c98500' : '#d03b3b';
+  const lw = 118;
+  const vw = Math.max(46, value.length * 8 + 12);
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${lw + vw}" height="20" role="img" aria-label="punktlighed i dag: ${value}">
+<rect width="${lw}" height="20" rx="3" fill="#52514e"/>
+<rect x="${lw}" width="${vw}" height="20" rx="3" fill="${color}"/>
+<rect x="${lw - 3}" width="6" height="20" fill="${color}"/>
+<g fill="#fff" font-family="system-ui,sans-serif" font-size="11" text-anchor="middle">
+<text x="${lw / 2}" y="14">🚆 punktlighed i dag</text>
+<text x="${lw + vw / 2}" y="14" font-weight="bold">${value}</text>
+</g>
+</svg>`;
+  await mkdir(path.join(ROOT, 'docs'), {recursive: true});
+  await writeFile(path.join(ROOT, 'docs', 'badge.svg'), svg);
 }
 
 async function buildStats() {
@@ -399,9 +531,17 @@ if (!OFFLINE) {
     generatedAt: nowIso,
     trains: latest,
   });
+
+  // Vejret må aldrig vælte togdata-kørslen
+  try {
+    await fetchWeather();
+  } catch (err) {
+    console.warn(`Vejrdata kunne ikke hentes: ${err.message}`);
+  }
 }
 
 const publishedDays = await publishDays();
 const stats = await buildStats();
 await writeJson(path.join(DOCS_DATA, 'stats.json'), stats);
+await writeBadge(stats);
 console.log(`Statistik genereret for ${stats.periodDays} dage, ${publishedDays} dagsfiler udgivet. Færdig.`);
