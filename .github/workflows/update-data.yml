@@ -6,6 +6,11 @@ on:
     # (Cron kører kun på default-branchen, dvs. efter merge til main.)
     - cron: '7 3-23 * * *'
   workflow_dispatch:
+    inputs:
+      discover:
+        description: 'Kør stationsscanning (find nye stationer)'
+        type: boolean
+        default: false
 
 permissions:
   contents: write
@@ -30,7 +35,7 @@ jobs:
         run: npm ci
 
       - name: Hent togdata
-        run: node scripts/fetch.js
+        run: node scripts/fetch.js ${{ inputs.discover == true && '--discover' || '' }}
 
       - name: Commit og push data
         run: |

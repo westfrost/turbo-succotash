@@ -78,13 +78,29 @@ async function mapPool(items, limit, fn) {
   return results;
 }
 
-// ---------- stationsopslag (caches, inkl. koordinater til kortet) ----------
+// ---------- stationskatalog ----------
+// Gemmes i data/stations.json som {stations: {id: {id, name, lat, lon}}}.
+// Kataloget bygges automatisk: et gitter af nearby-opslag hen over Danmark
+// finder alle stop med togprodukter. Scanningen gentages den 1. i måneden,
+// så nye stationer kommer med af sig selv.
 
-async function resolveStations() {
-  const cache = await readJson(STATIONS_CACHE, {});
-  let dirty = false;
+async function loadStationCache() {
+  const raw = await readJson(STATIONS_CACHE, null);
+  if (!raw) return {stations: {}};
+  if (raw.stations) return raw;
+  // migration fra det gamle navne-baserede format
+  const stations = {};
+  for (const s of Object.values(raw)) {
+    if (s?.id) stations[s.id] = {id: s.id, name: s.name, lat: s.lat ?? null, lon: s.lon ?? null};
+  }
+  return {stations};
+}
+
+// Fallback-bootstrap: slå seed-listen af knudepunkter op på navn.
+async function resolveSeedStations(cache) {
+  const known = new Set(Object.values(cache.stations).map((s) => s.name));
   for (const name of STATION_NAMES) {
-    if (cache[name]?.lat != null) continue;
+    if (known.has(name)) continue;
     try {
       const found = await withRetry(
         () => client.locations(name, {results: 3, stops: true, addresses: false, poi: false, language: 'da'}),
@@ -92,24 +108,59 @@ async function resolveStations() {
       );
       const stop = found.find((l) => l.type === 'stop' || l.type === 'station');
       if (stop) {
-        cache[name] = {
+        cache.stations[stop.id] = {
           id: stop.id,
           name: stop.name,
           lat: stop.location?.latitude ?? null,
           lon: stop.location?.longitude ?? null,
         };
-        dirty = true;
-        console.log(`Fandt station: ${name} -> ${stop.id} (${stop.name})`);
-      } else {
-        console.warn(`Ingen station fundet for "${name}"`);
       }
-      await sleep(200);
+      await sleep(150);
     } catch (err) {
       console.warn(`Opslag fejlede for "${name}": ${err.message}`);
     }
   }
-  if (dirty) await writeJson(STATIONS_CACHE, cache);
-  return Object.values(cache);
+}
+
+async function discoverStations(cache) {
+  // Gitter over Danmark (Bornholm har ingen tog). ~0,3° x 0,55° med 26 km
+  // radius giver god overlapning.
+  const points = [];
+  for (let lat = 54.55; lat <= 57.8; lat += 0.3) {
+    for (let lon = 8.0; lon <= 12.8; lon += 0.55) {
+      points.push([Math.round(lat * 100) / 100, Math.round(lon * 100) / 100]);
+    }
+  }
+  console.log(`Stationsscanning: ${points.length} gitterpunkter...`);
+  const before = Object.keys(cache.stations).length;
+  let failed = 0;
+  await mapPool(points, 4, async ([lat, lon]) => {
+    try {
+      const found = await withRetry(
+        () => client.nearby({type: 'location', latitude: lat, longitude: lon},
+          {results: 100, distance: 26000, stops: true, poi: false}),
+        `nearby(${lat},${lon})`, 2,
+      );
+      for (const l of found) {
+        if (l.type !== 'stop' && l.type !== 'station') continue;
+        // kun stop der betjenes af mindst ét togprodukt (frasorterer busstop)
+        if (!Object.values(l.products ?? {}).some(Boolean)) continue;
+        if (!cache.stations[l.id]) {
+          cache.stations[l.id] = {
+            id: l.id,
+            name: l.name,
+            lat: l.location?.latitude ?? null,
+            lon: l.location?.longitude ?? null,
+          };
+        }
+      }
+    } catch (err) {
+      failed++;
+      console.warn(`nearby(${lat},${lon}): opgivet (${err.message})`);
+    }
+  });
+  const added = Object.keys(cache.stations).length - before;
+  console.log(`Scanning færdig: ${added} nye stationer fundet (${failed} punkter fejlede). I alt ${Object.keys(cache.stations).length}.`);
 }
 
 // ---------- vejrdata (Open-Meteo, gratis og uden nøgle) ----------
@@ -246,14 +297,13 @@ function causeOf(remarks) {
 
 async function fetchAllDepartures(stations) {
   let failed = 0;
-  const perStation = await mapPool(stations, 4, async (st) => {
+  const perStation = await mapPool(stations, 6, async (st) => {
     try {
       const res = await withRetry(
         () => client.departures(st.id, {duration: 75, results: 400, remarks: true, language: 'da'}),
         `departures(${st.name})`,
       );
       const deps = Array.isArray(res) ? res : res.departures ?? [];
-      console.log(`${st.name}: ${deps.length} afgange`);
       return deps.map((d) => ({...d, _station: st.name}));
     } catch (err) {
       failed++;
@@ -442,9 +492,9 @@ async function publishDays() {
   });
 
   // Stationskoordinater til danmarkskortet
-  const cache = await readJson(STATIONS_CACHE, {});
+  const cache = await loadStationCache();
   await writeJson(path.join(DOCS_DATA, 'stations.json'),
-    Object.values(cache)
+    Object.values(cache.stations)
       .filter((s) => s.lat != null && s.lon != null)
       .map((s) => ({name: s.name, lat: s.lat, lon: s.lon})));
 
@@ -512,8 +562,20 @@ const today = dkParts().date;
 console.log(`== dk-togstatus ${nowIso} (${today})${OFFLINE ? ' [offline]' : ''} ==`);
 
 if (!OFFLINE) {
-  const stations = await resolveStations();
-  if (stations.length === 0) throw new Error('Ingen stationer kunne slås op.');
+  const cache = await loadStationCache();
+  const count = () => Object.keys(cache.stations).length;
+  // Scan: ved --discover, ved (næsten) tomt katalog, og den 1. i måneden
+  // kl. 05 dansk tid, så nye stationer kommer med automatisk.
+  const needDiscover = process.argv.includes('--discover')
+    || count() < 60
+    || (today.endsWith('-01') && dkParts().hour === 5);
+  if (needDiscover) {
+    if (count() < 10) await resolveSeedStations(cache);
+    await discoverStations(cache);
+    await writeJson(STATIONS_CACHE, cache);
+  }
+  if (count() === 0) throw new Error('Ingen stationer kunne slås op.');
+  const stations = Object.values(cache.stations);
   console.log(`${stations.length} stationer i brug.`);
 
   const deps = await fetchAllDepartures(stations);

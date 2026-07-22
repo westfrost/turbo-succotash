@@ -1,0 +1,56 @@
+name: Overvågning
+
+# Selvkørende vagthund: tjekker hver 6. time, om togdataene stadig opdateres.
+# Går databasen i stå, oprettes automatisk en GitHub-issue (som udløser en
+# notifikation til ejeren). Issuen genbruges, så der ikke spammes.
+on:
+  schedule:
+    - cron: '23 */6 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Tjek dataenes alder
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          age_hours=$(python3 - <<'EOF'
+          import json
+          from datetime import datetime, timezone
+          g = json.load(open('docs/data/latest.json'))['generatedAt']
+          dt = datetime.fromisoformat(g.replace('Z', '+00:00'))
+          print(int((datetime.now(timezone.utc) - dt).total_seconds() // 3600))
+          EOF
+          )
+          echo "Seneste data er $age_hours time(r) gamle."
+          if [ "$age_hours" -lt 4 ]; then
+            echo "Alt OK."
+            exit 0
+          fi
+          gh label create driftsalarm --color D93F0B --description "Automatisk alarm fra overvågningen" --force
+          existing=$(gh issue list --label driftsalarm --state open --json number --jq '.[0].number' || true)
+          if [ -n "$existing" ]; then
+            echo "Der er allerede en åben driftsalarm (#$existing)."
+            exit 0
+          fi
+          gh issue create \
+            --title "⚠️ Togdata er ikke opdateret i $age_hours timer" \
+            --label driftsalarm \
+            --body "Overvågningen har opdaget, at databasen ikke er blevet opdateret i $age_hours timer.
+
+          Tjekliste:
+          1. Se de seneste kørsler af workflowet **Opdater togdata** under Actions – fejler de, står årsagen i loggen.
+          2. Kør workflowet manuelt (Actions → Opdater togdata → Run workflow).
+          3. Svarer Rejseplanens API ikke (alle stationsopslag fejler), er det som regel forbigående – prøv igen senere.
+          4. GitHubs cron kan springe enkelte kørsler over ved høj belastning; et hul på 1-2 timer er normalt, men ikke længere.
+
+          Denne issue er oprettet automatisk og kan lukkes, når dataene opdateres igen."
