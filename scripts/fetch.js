@@ -165,6 +165,37 @@ async function discoverStations(cache) {
   console.log(`Scanning færdig: ${added} nye stationer fundet (${failed} punkter fejlede). I alt ${Object.keys(cache.stations).length}.`);
 }
 
+// Supplerende og mere komplet metode: slå hver unik togtur op og høst ALLE
+// dens stop undervejs. Serveren capper nearby-resultater (busstop æder
+// kvoten i byerne), men turene kender per definition alle betjente stationer.
+async function harvestStationsFromTrips(cache, deps) {
+  const ids = [...new Set(deps.map((d) => d.tripId).filter(Boolean))].slice(0, 800);
+  console.log(`Trip-høst: slår ${ids.length} ture op...`);
+  const before = Object.keys(cache.stations).length;
+  let failed = 0;
+  await mapPool(ids, 4, async (id) => {
+    try {
+      const res = await client.trip(id, {stopovers: true, remarks: false, language: 'da'});
+      const trip = res.trip ?? res;
+      for (const so of trip.stopovers ?? []) {
+        const s = so.stop;
+        if (s?.id && !cache.stations[s.id]) {
+          cache.stations[s.id] = {
+            id: s.id,
+            name: s.name,
+            lat: s.location?.latitude ?? null,
+            lon: s.location?.longitude ?? null,
+          };
+        }
+      }
+    } catch {
+      failed++; // enkelte ture (fx togbusser) kan ikke slås op - det er fint
+    }
+  });
+  const added = Object.keys(cache.stations).length - before;
+  console.log(`Trip-høst færdig: ${added} nye stationer (${failed} ture fejlede). I alt ${Object.keys(cache.stations).length}.`);
+}
+
 // ---------- vejrdata (Open-Meteo, gratis og uden nøgle) ----------
 
 // Punkter der dækker jernbanenettet geografisk.
@@ -582,6 +613,11 @@ if (!OFFLINE) {
 
   const deps = await fetchAllDepartures(stations);
   console.log(`${deps.length} afgange hentet i alt.`);
+
+  if (needDiscover) {
+    await harvestStationsFromTrips(cache, deps);
+    await writeJson(STATIONS_CACHE, cache);
+  }
 
   const dayFile = path.join(DAYS_DIR, `${today}.json`);
   const dayMap = await readJson(dayFile, {});
