@@ -137,8 +137,10 @@ async function discoverStations(cache) {
   await mapPool(points, 4, async ([lat, lon]) => {
     try {
       const found = await withRetry(
+        // Høj results-grænse: nearby returnerer nærmeste stop af ALLE slags,
+        // og i byområder er de fleste busstop – togstationerne skal med.
         () => client.nearby({type: 'location', latitude: lat, longitude: lon},
-          {results: 100, distance: 26000, stops: true, poi: false}),
+          {results: 500, distance: 26000, stops: true, poi: false}),
         `nearby(${lat},${lon})`, 2,
       );
       for (const l of found) {
