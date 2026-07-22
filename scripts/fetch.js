@@ -326,6 +326,54 @@ function causeOf(remarks) {
   return 'Andet';
 }
 
+// Ægte planlagt afgang fra togets OPRINDELSESstation, udledt af HAFAS-tripId'et
+// (felterne DA=dato og 1T=afgangstid, HHMM med et day-offset-ciffer foran).
+// Dette er en stabil, dækningsuafhængig tidsstempling – i modsætning til "det
+// tidligste tidspunkt en tilfældig station observerede toget på".
+function cphOffset(utcMs) {
+  const s = new Intl.DateTimeFormat('en-US', {timeZone: TZ, timeZoneName: 'longOffset'}).format(utcMs);
+  const m = s.match(/GMT([+-]\d{2}:\d{2})/);
+  return m ? m[1] : '+01:00';
+}
+
+function originDeparture(tripId) {
+  const g = (tag) => {
+    const m = tripId.match(new RegExp(`#${tag}#([^#]*)#`));
+    return m ? m[1] : null;
+  };
+  const da = g('DA'); const t1 = g('1T');
+  if (!da || t1 == null || !/^\d{6}$/.test(da)) return null;
+  const dd = +da.slice(0, 2); const mo = +da.slice(2, 4); const yy = 2000 + +da.slice(4, 6);
+  const n = parseInt(t1, 10);
+  if (!Number.isFinite(n)) return null;
+  const dayOff = Math.floor(n / 10000); const rem = n % 10000;
+  const hh = Math.floor(rem / 100); const mi = rem % 100;
+  if (hh > 23 || mi > 59) return null;
+  const rolled = new Date(Date.UTC(yy, mo - 1, dd + dayOff));
+  const Y = rolled.getUTCFullYear(); const Mo = rolled.getUTCMonth(); const D = rolled.getUTCDate();
+  const off = cphOffset(Date.UTC(Y, Mo, D, hh, mi));
+  const p2 = (x) => String(x).padStart(2, '0');
+  const dateStr = `${Y}-${p2(Mo + 1)}-${p2(D)}`;
+  return {iso: `${dateStr}T${p2(hh)}:${p2(mi)}:00${off}`, date: dateStr, hour: hh};
+}
+
+// Retter planned/date/hour til den ægte oprindelsesafgang for alle records i
+// en dagsfil (nøglen ER tripId'et). Idempotent; returnerer true hvis noget
+// ændredes, så den kaldende kan skrive filen tilbage.
+function normalizeDayMap(dayMap) {
+  let changed = false;
+  for (const [tripId, rec] of Object.entries(dayMap)) {
+    const o = originDeparture(tripId);
+    if (o && (rec.planned !== o.iso || rec.hour !== o.hour || rec.date !== o.date)) {
+      rec.planned = o.iso;
+      rec.hour = o.hour;
+      rec.date = o.date;
+      changed = true;
+    }
+  }
+  return changed;
+}
+
 // ---------- hentning ----------
 
 async function fetchAllDepartures(stations) {
@@ -358,15 +406,19 @@ function mergeIntoDay(dayMap, deps, nowIso) {
   for (const d of deps) {
     if (!d.tripId || !d.plannedWhen) continue;
     const delay = clampDelay(d.cancelled ? null : d.delay);
-    const {date, hour} = dkParts(new Date(d.plannedWhen));
+    // Ægte afgang fra oprindelsen (stabil pr. tog); fald tilbage til den
+    // observerede tid, hvis tripId'et undtagelsesvis ikke kan parses.
+    const orig = originDeparture(d.tripId) ?? {
+      iso: d.plannedWhen, ...dkParts(new Date(d.plannedWhen)),
+    };
     const rec = dayMap[d.tripId] ?? {
       line: d.line?.name ?? '?',
       product: productLabel(d.line),
       operator: operatorOf(d.line),
       direction: d.direction ?? '',
-      date,
-      hour,
-      planned: d.plannedWhen,
+      date: orig.date,
+      hour: orig.hour,
+      planned: orig.iso,
       lastDelay: delay,
       maxDelay: delay ?? 0,
       cancelled: false,
@@ -377,12 +429,8 @@ function mergeIntoDay(dayMap, deps, nowIso) {
     rec.cancelled = rec.cancelled || Boolean(d.cancelled);
     const cause = causeOf(d.remarks);
     if (cause && (rec.cause == null || rec.cause === 'Andet')) rec.cause = cause;
-    if (d.plannedWhen <= rec.planned) {
-      // tidligste observation bestemmer togets "starttidspunkt" i statistikken
-      rec.planned = d.plannedWhen;
-      rec.date = date;
-      rec.hour = hour;
-    }
+    // planned/date/hour er nu ankret til oprindelsesafgangen og er stabile –
+    // ingen overskrivning fra tilfældige stationsobservationer.
     // Seneste observation MED realtidsdata bestemmer aktuel status. Stationer
     // langt ude i fremtiden har endnu ingen realtid (delay=null) og må ikke
     // overskrive en kendt forsinkelse.
@@ -499,6 +547,9 @@ async function publishDays() {
   for (const f of files) {
     const date = f.replace('.json', '');
     const dayMap = await readJson(path.join(DAYS_DIR, f), {});
+    // Ret ældre dage til den ægte oprindelsesafgang og gem tilbage én gang,
+    // så både historik og statistik (som læses efter) bliver korrekte.
+    if (normalizeDayMap(dayMap)) await writeJson(path.join(DAYS_DIR, f), dayMap);
     const trains = Object.values(dayMap)
       .map((r) => ({
         line: r.line,
