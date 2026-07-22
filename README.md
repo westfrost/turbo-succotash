@@ -9,8 +9,12 @@ Selvopdaterende database og website med overblik over, om togene i Danmark køre
 
 1. **Datakilde:** [Rejseplanens](https://www.rejseplanen.dk) HAFAS-API (via
    [`hafas-client`](https://github.com/public-transport/hafas-client)).
-   `scripts/fetch.js` henter afgangstavler for ~47 stationer, der tilsammen
-   dækker alle jernbanestrækninger i landet, og dedupliker togene på tur-id.
+   `scripts/fetch.js` henter afgangstavler for **alle togstationer i landet**
+   og dedupliker togene på tur-id. Stationskataloget bygges automatisk ved at
+   scanne Danmark i et gitter af nearby-opslag; scanningen gentages den 1. i
+   måneden (og kan køres manuelt med workflow-inputtet "discover"), så nye
+   stationer kommer med af sig selv. Vejrdata hentes fra
+   [Open-Meteo](https://open-meteo.com).
 2. **Database:** JSON-filer i git:
    - `data/days/ÅÅÅÅ-MM-DD.json` – alle unikke tog pr. dag med seneste/største
      forsinkelse, linje, togtype, operatør m.m.
@@ -37,6 +41,18 @@ node scripts/fetch.js            # henter data (kræver internetadgang)
 node scripts/fetch.js --offline  # genberegner kun docs/data/* fra data/days/
 python3 -m http.server -d docs 8000   # åbn http://localhost:8000
 ```
+
+## Selvkørende vedligehold
+
+Projektet passer sig selv, også uden menneskelig indblanding:
+
+- **Overvågning** (`.github/workflows/healthcheck.yml`): tjekker hver 6. time,
+  om dataene stadig opdateres. Går databasen i stå i 4+ timer, oprettes
+  automatisk en issue med fejlsøgningstjekliste (og GitHub sender notifikation).
+- **Stationsscanning:** den 1. i måneden genscannes hele landet, så nye eller
+  omdøbte stationer automatisk kommer med.
+- **Dependabot** (`.github/dependabot.yml`): åbner ugentlige pull requests, når
+  `hafas-client` eller GitHub Actions har opdateringer – de skal blot merges.
 
 ## Definitioner
 
