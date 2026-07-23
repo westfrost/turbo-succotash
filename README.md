@@ -25,7 +25,7 @@ Selvopdaterende database og website med overblik over, om togene i Danmark køre
      historik-sektionen, hvor man kan bladre i datoer eller vælge en
      fra/til-periode med egne tabeller, grafer og nøgletal
 3. **Automatik:** GitHub Actions (`.github/workflows/update-data.yml`) kører
-   **hver time** kl. xx:07 (UTC 03–23), henter friske data og committer dem.
+   **hver time døgnet rundt** (kl. xx:07 UTC), henter friske data og committer dem.
 4. **Website:** `docs/` er en statisk side med søgbar afgangstabel, KPI'er,
    grafer og tips. `.github/workflows/pages.yml` spejler `docs/` til
    `gh-pages`-branchen, som GitHub Pages serverer, hver gang data eller siden

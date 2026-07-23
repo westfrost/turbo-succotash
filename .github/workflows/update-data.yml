@@ -2,9 +2,9 @@ name: Opdater togdata
 
 on:
   schedule:
-    # Hver time fra tidlig morgen til efter midnat dansk tid.
-    # (Cron kører kun på default-branchen, dvs. efter merge til main.)
-    - cron: '7 3-23 * * *'
+    # Hver time døgnet rundt (minut 7). Cron kører altid i UTC og kun på
+    # default-branchen. Fuld dækning, så også de sene/tidlige tog kommer med.
+    - cron: '7 * * * *'
   workflow_dispatch:
     inputs:
       discover:
